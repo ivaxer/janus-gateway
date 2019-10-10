@@ -471,6 +471,10 @@ static int janus_nosip_srtp_set_local(janus_nosip_session *session, gboolean vid
 static int janus_nosip_srtp_set_remote(janus_nosip_session *session, gboolean video, const char *profile, const char *crypto) {
 	if(session == NULL || profile == NULL || crypto == NULL)
 		return -1;
+	if((video && session->media.video_srtp_in) || (!video && session->media.audio_srtp_in)) {
+		JANUS_LOG(LOG_VERB, "%s inbound SRTP session already created. Skip.\n", video ? "Video" : "Audio");
+		return -1;
+	}
 	/* Which SRTP profile is being negotiated? */
 	JANUS_LOG(LOG_WARN, "[NoSIP-%p] %s\n", session, profile);
 	gsize key_length = 0, salt_length = 0, master_length = 0;
@@ -502,9 +506,18 @@ static int janus_nosip_srtp_set_remote(janus_nosip_session *session, gboolean vi
 	}
 	JANUS_LOG(LOG_WARN, "[NoSIP-%p] Key/Salt/Master: %zu/%zu/%zu\n",
 		session, master_length, key_length, salt_length);
+	/* Split key+salt from lifetime and MKI:length parameters */
+	gchar **crypto_parts = g_strsplit(crypto, "|", 2);
+	if(crypto_parts) {
+		if(crypto_parts[0]) {
+			crypto = crypto_parts[0];
+		}
+	}
 	/* Base64 decode the crypto string and set it as the remote SRTP context */
 	gsize len = 0;
 	guchar *decoded = g_base64_decode(crypto, &len);
+	g_strfreev(crypto_parts);
+	crypto = NULL;
 	if(len < master_length) {
 		/* FIXME Can this happen? */
 		g_free(decoded);
@@ -1778,6 +1791,11 @@ void janus_nosip_sdp_process(janus_nosip_session *session, janus_sdp *sdp, gbool
 							gboolean video = (m->type == JANUS_SDP_VIDEO);
 							janus_nosip_srtp_set_remote(session, video, profile, crypto);
 							session->media.has_srtp_remote = TRUE;
+							if(!answer) {
+								// Require SRTP if remote offered.
+								session->media.require_srtp = TRUE;
+								session->media.has_srtp_local = TRUE;
+							}
 						}
 					}
 				}
